@@ -1,0 +1,235 @@
+diff --git a/config/programmer/target.mk b/config/programmer/target.mk
+index 84c0f8e15d..9cbd7f2e09 100644
+--- a/config/programmer/target.mk
++++ b/config/programmer/target.mk
+@@ -1,4 +1,4 @@
+-CHIP		?= best2001
++CHIP		?= best2300
+ 
+ DEBUG		?= 1
+ 
+diff --git a/config/programmer_inflash/target.mk b/config/programmer_inflash/target.mk
+index 2351b38621..b475c10b4c 100644
+--- a/config/programmer_inflash/target.mk
++++ b/config/programmer_inflash/target.mk
+@@ -1,4 +1,4 @@
+-CHIP		?= best2300p
++CHIP		?= best2300
+ 
+ DEBUG		?= 1
+ 
+@@ -28,3 +28,5 @@ CFLAGS_IMAGE +=
+ 
+ LDFLAGS_IMAGE +=
+ 
++export FLASH_UNIQUE_ID ?= 1
++
+diff --git a/config/reliability_test/tgt_hardware.c b/config/reliability_test/tgt_hardware.c
+index d48e71fd5a..df48f8d9d4 100644
+--- a/config/reliability_test/tgt_hardware.c
++++ b/config/reliability_test/tgt_hardware.c
+@@ -38,8 +38,8 @@ const uint16_t CFG_HW_ADCKEY_MAP_TABLE[CFG_HW_ADCKEY_NUMBER] = {
+ #define CFG_HW_GPIOKEY_UP_LEVEL            (1)
+ const struct HAL_KEY_GPIOKEY_CFG_T cfg_hw_gpio_key_cfg[CFG_HW_GPIOKEY_NUM] = {
+ #if (CFG_HW_GPIOKEY_NUM > 0)
+-    {HAL_KEY_CODE_FN1,{HAL_IOMUX_PIN_P1_7, HAL_IOMUX_FUNC_AS_GPIO, HAL_IOMUX_PIN_VOLTAGE_VIO, HAL_IOMUX_PIN_PULLUP_ENALBE}},
+-    {HAL_KEY_CODE_FN2,{HAL_IOMUX_PIN_P1_6, HAL_IOMUX_FUNC_AS_GPIO, HAL_IOMUX_PIN_VOLTAGE_VIO, HAL_IOMUX_PIN_PULLUP_ENALBE}},
++    //{HAL_KEY_CODE_FN1,{HAL_IOMUX_PIN_P1_7, HAL_IOMUX_FUNC_AS_GPIO, HAL_IOMUX_PIN_VOLTAGE_VIO, HAL_IOMUX_PIN_PULLUP_ENALBE}},
++    //{HAL_KEY_CODE_FN2,{HAL_IOMUX_PIN_P1_6, HAL_IOMUX_FUNC_AS_GPIO, HAL_IOMUX_PIN_VOLTAGE_VIO, HAL_IOMUX_PIN_PULLUP_ENALBE}},
+ #endif
+ };
+ 
+diff --git a/platform/hal/best2300/hal_iomux_best2300.c b/platform/hal/best2300/hal_iomux_best2300.c
+index 2b7c2f17d6..9efa0a56bd 100644
+--- a/platform/hal/best2300/hal_iomux_best2300.c
++++ b/platform/hal/best2300/hal_iomux_best2300.c
+@@ -989,3 +989,33 @@ enum HAL_PWRKEY_IRQ_T WEAK hal_pwrkey_get_irq_state(void)
+     return state;
+ }
+ 
++
++void hal_iomux_single_wire_uart_rx(void)
++{
++    const struct HAL_IOMUX_PIN_FUNCTION_MAP pinmux_uart_0_rx[] =
++    {
++        {HAL_IOMUX_PIN_P1_7, HAL_IOMUX_FUNC_GPIO, HAL_IOMUX_PIN_VOLTAGE_VIO, HAL_IOMUX_PIN_PULLUP_ENALBE},     //TX as GPIO
++        {HAL_IOMUX_PIN_P1_6, HAL_IOMUX_FUNC_UART0_RX, HAL_IOMUX_PIN_VOLTAGE_VIO, HAL_IOMUX_PIN_PULLUP_ENALBE}, //RX
++    };
++
++    hal_gpio_pin_set_dir((enum HAL_GPIO_PIN_T)pinmux_uart_0_rx[0].pin, HAL_GPIO_DIR_IN, 1);//rx
++    hal_gpio_pin_set_dir((enum HAL_GPIO_PIN_T)pinmux_uart_0_rx[1].pin, HAL_GPIO_DIR_IN, 1);
++
++
++    hal_iomux_init((struct HAL_IOMUX_PIN_FUNCTION_MAP *)&pinmux_uart_0_rx, 2);
++}
++
++void hal_iomux_single_wire_uart_tx(void)
++{
++    const struct HAL_IOMUX_PIN_FUNCTION_MAP pinmux_uart_0_tx[] =
++    {
++        {HAL_IOMUX_PIN_P1_6, HAL_IOMUX_FUNC_GPIO, HAL_IOMUX_PIN_VOLTAGE_VIO, HAL_IOMUX_PIN_PULLUP_ENALBE},        //RX as GPIO
++        {HAL_IOMUX_PIN_P1_7, HAL_IOMUX_FUNC_UART0_TX, HAL_IOMUX_PIN_VOLTAGE_VIO, HAL_IOMUX_PIN_PULLUP_ENALBE},    //TX
++    };
++
++    hal_gpio_pin_set_dir((enum HAL_GPIO_PIN_T)pinmux_uart_0_tx[0].pin, HAL_GPIO_DIR_IN, 1);//tx
++    hal_gpio_pin_set_dir((enum HAL_GPIO_PIN_T)pinmux_uart_0_tx[1].pin, HAL_GPIO_DIR_IN, 1);
++
++
++    hal_iomux_init((struct HAL_IOMUX_PIN_FUNCTION_MAP *)&pinmux_uart_0_tx, 2);
++}
+\ No newline at end of file
+diff --git a/platform/hal/best2300/hal_iomux_best2300.h b/platform/hal/best2300/hal_iomux_best2300.h
+index fea8e01c13..4768439057 100644
+--- a/platform/hal/best2300/hal_iomux_best2300.h
++++ b/platform/hal/best2300/hal_iomux_best2300.h
+@@ -210,6 +210,9 @@ void hal_iomux_set_mcu_clock_out(void);
+ 
+ void hal_iomux_set_bt_clock_out(void);
+ 
++void hal_iomux_single_wire_uart_rx(void);
++void hal_iomux_single_wire_uart_tx(void);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/platform/hal/hal_trace.c b/platform/hal/hal_trace.c
+index 82d4481b57..59ca0b7df4 100644
+--- a/platform/hal/hal_trace.c
++++ b/platform/hal/hal_trace.c
+@@ -1133,14 +1133,23 @@ static int hal_trace_printf_internal(const char *tag, const char *fmt, enum PRIN
+ 
+ int hal_trace_printf(const char *fmt, ...)
+ {
+-    int ret;
++/*     int ret;
+     va_list ap;
+ 
+     va_start(ap, fmt);
+     ret = hal_trace_printf_internal(NULL, fmt, (PRINTF_FLAG_LINE_FEED | PRINTF_FLAG_TIME_STAMP), ap);
++    va_end(ap); */
++    va_list ap;
++
++    hal_trace_flush_buffer();
++
++    va_start(ap, fmt);
++    hal_trace_printf_internal(NULL, fmt, (PRINTF_FLAG_LINE_FEED | PRINTF_FLAG_TIME_STAMP), ap);
+     va_end(ap);
+ 
+-    return ret;
++    hal_trace_flush_buffer();
++
++    return 1;
+ }
+ 
+ int hal_trace_printf_without_ts(const char *fmt, ...)
+diff --git a/tests/programmer/flash_programmer.c b/tests/programmer/flash_programmer.c
+index b49e756918..210416b0c0 100644
+--- a/tests/programmer/flash_programmer.c
++++ b/tests/programmer/flash_programmer.c
+@@ -34,7 +34,7 @@ static int send_burn_data_reply(enum ERR_CODE code, unsigned short sec_seq, unsi
+ 
+ #define FLASH_PROGRAMMER_VERSION        0x0101
+ 
+-#define SLIDE_WIN_NUM                   2
++#define SLIDE_WIN_NUM                   1           //一次下一块,速度比2慢，先保证功能
+ 
+ #define BULK_READ_STEP_SIZE             0x1000
+ 
+@@ -1495,6 +1495,7 @@ _err:
+     return 1;
+ }
+ 
++
+ void programmer_loop(void)
+ {
+     int ret;
+@@ -1516,7 +1517,6 @@ _sync:
+     reset_programmer_state(&buf, &len);
+ 
+     trace_stage_info("Send SECTOR SIZE msg");
+-
+     ret = send_sector_size_msg();
+     if (ret) {
+         TRACE("Sending SECTOR SIZE msg failed");
+@@ -1537,11 +1537,12 @@ _sync:
+             buf_len = 0;
+         }
+         ret = recv_data_ex(buf, buf_len, len, &rlen);
++        TRACE("[Programmer recv]expect=%d rlen=%d",len,rlen);
+         if (ret) {
+             TRACE("Receiving data failed: %d", ret);
+             goto _err;
+         }
+-        //dump_buffer(buf, rlen);
++        dump_buffer(buf, rlen>20 ? 20 : rlen);
+         if (len != rlen) {
+             TRACE("Receiving part of the data: expect=%u real=%u", len, rlen);
+             goto _err;
+diff --git a/tests/programmer/sys_api_programmer.c b/tests/programmer/sys_api_programmer.c
+index 53400e8510..b662aaae82 100644
+--- a/tests/programmer/sys_api_programmer.c
++++ b/tests/programmer/sys_api_programmer.c
+@@ -36,6 +36,10 @@
+ #include "usb_cdc.h"
+ #endif
+ 
++#include "hexdump.h"
++extern void hal_iomux_single_wire_uart_rx(void);
++extern void hal_iomux_single_wire_uart_tx(void);
++
+ #define PGM_TIMEOUT_INFINITE                    ((uint32_t)-1)
+ 
+ enum PGM_DOWNLOAD_TRANSPORT {
+@@ -124,6 +128,8 @@ static void uart_rx_dma_handler(uint32_t xfer_size, int dma_error, union HAL_UAR
+     }
+ 
+     uart_dma_rx_size = xfer_size;
++    TRACE("UART-RX Error: dma_error=%d, status.FE=%d, status.OE-%d, status.PE=%d, status.RT=%d, status.BE=%d.", dma_error, status.FE,
++                            status.OE,status.PE,status.RT,status.BE);
+     if (dma_error || status.FE || status.OE || status.PE || status.RT || status.BE) {
+         TRACE("UART-RX Error: dma_error=%d, status=0x%08x", dma_error, status.reg);
+         uart_dma_rx_state = UART_DMA_ERROR;
+@@ -136,11 +142,14 @@ static void uart_break_handler(void)
+ {
+     TRACE("****** Handle break ******");
+ 
++    return;
++
+     cancel_xfer = true;
+     hal_uart_stop_dma_recv(dld_uart);
+     hal_uart_stop_dma_send(dld_uart);
+ }
+ 
++
+ #ifdef CHIP_HAS_USB
+ static void usb_serial_break_handler(void)
+ {
+@@ -443,6 +452,7 @@ static int uart_send_data(const unsigned char *buf, size_t len)
+ int send_data(const unsigned char *buf, size_t len)
+ {
+     int nRet;
++    hal_iomux_single_wire_uart_tx();
+ 
+     if (cancel_xfer) {
+         nRet = -1;
+@@ -460,6 +470,11 @@ int send_data(const unsigned char *buf, size_t len)
+     }
+ 
+ exit:
++    while (!hal_uart_get_flag(dld_uart).TXFE || hal_uart_get_flag(dld_uart).BUSY);
++
++    hal_iomux_single_wire_uart_rx();
++    hal_uart_flush(dld_uart, 0);
++
+     return nRet;
+ }
+ 
+@@ -533,7 +548,7 @@ static int uart_recv_data_dma(unsigned char *buf, size_t expect, size_t *rlen)
+ 
+     mask.reg = 0;
+     mask.BE = 1;
+-    mask.FE = 1;
++    //mask.FE = 1;
+     mask.OE = 1;
+     mask.PE = 1;
+     //mask.RT = 1;

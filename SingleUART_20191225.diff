@@ -1,0 +1,1083 @@
+diff --git a/apps/factory/Makefile b/apps/factory/Makefile
+index f8564a4655..d10593fc67 100644
+--- a/apps/factory/Makefile
++++ b/apps/factory/Makefile
+@@ -5,6 +5,8 @@ obj-y := $(obj-y:.c=.o)
+ obj-y := $(obj-y:.cpp=.o)
+ obj-y := $(obj-y:.S=.o)
+ 
++obj-y += ../../utils/hexdump/
++
+ ccflags-y +=  \
+     -Iutils/boot_struct \
+     -Iutils/intersyshci \
+@@ -23,7 +25,8 @@ ccflags-y +=  \
+ 	-Iservices/multimedia/audio/codec/sbc/inc \
+ 	-Iservices/multimedia/audio/codec/sbc/src/inc \
+     -Iutils/cqueue \
+-    -Iservices/nv_section/factory_section
++    -Iservices/nv_section/factory_section \
++    -Iutils/hexdump
+ 
+ ifeq ($(AUDIO_RESAMPLE),1)
+ CFLAGS_app_factory_audio.o += -D__AUDIO_RESAMPLE__
+diff --git a/apps/factory/app_factory_cdc_comm.c b/apps/factory/app_factory_cdc_comm.c
+index b2acc00e7d..bd76cc9dea 100644
+--- a/apps/factory/app_factory_cdc_comm.c
++++ b/apps/factory/app_factory_cdc_comm.c
+@@ -7,273 +7,27 @@
+ #include "tool_msg.h"
+ #include "sys_api_cdc_comm.h"
+ #include "app_factory_cdc_comm.h"
++#include "hexdump.h"
++#include "usb_cdc.h"
+ 
+-static enum PARSE_STATE parse_state;
+-static struct message_t recv_msg;
+-static struct message_t send_msg = { { PREFIX_CHAR, }, };
+-
+-static unsigned char check_sum(unsigned char *buf, unsigned char len)
+-{
+-    int i;
+-    unsigned char sum = 0;
+-
+-    for (i = 0; i < len; i++) {
+-        sum += buf[i];
+-    }
+-
+-    return sum;
+-}
+-
+-int send_reply(const unsigned char *payload, unsigned int len)
+-{
+-    int ret = 0;
+-
+-    if (len + 1 > sizeof(send_msg.data)) {
+-        TRACE("Packet length too long: %u", len);
+-        return -1;
+-    }
+-
+-    send_msg.hdr.type = recv_msg.hdr.type;
+-    send_msg.hdr.seq = recv_msg.hdr.seq;
+-    send_msg.hdr.len = len;
+-    memcpy(&send_msg.data[0], payload, len);
+-    send_msg.data[len] = ~check_sum((unsigned char *)&send_msg, MSG_TOTAL_LEN(&send_msg) - 1);
+-
+-    ret = send_data((unsigned char *)&send_msg, MSG_TOTAL_LEN(&send_msg));
+-
+-    return ret;
+-}
+-
+-static void reset_parse_state(unsigned char **buf, size_t *len)
+-{
+-    parse_state = PARSE_HEADER;
+-    memset(&recv_msg.hdr, 0, sizeof(recv_msg.hdr));
+-
+-    *buf = (unsigned char *)&recv_msg.hdr;
+-    *len = sizeof(recv_msg.hdr);
+-}
+-
+-static enum ERR_CODE check_msg_hdr(void)
+-{
+-    enum ERR_CODE errcode = ERR_NONE;
+-
+-    switch (recv_msg.hdr.type) {
+-        case TYPE_SYS:
+-            if (recv_msg.hdr.len != 1 && recv_msg.hdr.len != 5) {
+-                //TRACE("SYS msg length error: %u", recv_msg.hdr.len);
+-                errcode = ERR_LEN;
+-            }
+-            break;
+-        case TYPE_READ:
+-            if (recv_msg.hdr.len != 4) {
+-                //TRACE("READ msg length error: %u", recv_msg.hdr.len);
+-                errcode = ERR_LEN;
+-            }
+-            break;
+-        case TYPE_WRITE:
+-            if (recv_msg.hdr.len <= 4 || recv_msg.hdr.len > 20) {
+-                //TRACE("WRITE msg length error: %u", recv_msg.hdr.len);
+-                errcode = ERR_LEN;
+-            }
+-            break;
+-        default:
+-            break;
+-    }
+-
+-    if (errcode == ERR_NONE && recv_msg.hdr.len + 1 > sizeof(recv_msg.data)) {
+-        errcode = ERR_LEN;
+-    }
+-
+-    return errcode;
+-}
+-
+-static enum ERR_CODE handle_sys_cmd(enum SYS_CMD_TYPE cmd, unsigned char *param, unsigned int len)
+-{
+-    unsigned char cret[5];
+-    unsigned int bootmode;
+-
+-    cret[0] = ERR_NONE;
+-
+-    if (cmd == SYS_CMD_SET_BOOTMODE || cmd == SYS_CMD_CLR_BOOTMODE) {
+-        if (len != 4) {
+-            TRACE("Invalid SYS CMD len %u for cmd: 0x%x", len, cmd);
+-            return ERR_DATA_LEN;
+-        }
+-    } else {
+-        if (len != 0) {
+-            TRACE("Invalid SYS CMD len %u for cmd: 0x%x", len, cmd);
+-            return ERR_DATA_LEN;
+-        }
+-    }
+-
+-    switch (cmd) {
+-        case SYS_CMD_REBOOT: {
+-            TRACE("--- Reboot---");
+-            send_reply(cret, 1);
+-            system_reboot();
+-            break;
+-        }
+-        case SYS_CMD_SHUTDOWN: {
+-            TRACE("--- Shutdown ---");
+-            send_reply(cret, 1);
+-            system_shutdown();
+-            break;
+-        }
+-        case SYS_CMD_SET_BOOTMODE: {
+-            TRACE("--- Set bootmode ---");
+-            memcpy(&bootmode, param, 4);
+-            system_set_bootmode(bootmode);
+-            send_reply(cret, 1);
+-            break;
+-        }
+-        case SYS_CMD_CLR_BOOTMODE: {
+-            TRACE("--- Clear bootmode ---");
+-            memcpy(&bootmode, param, 4);
+-            system_clear_bootmode(bootmode);
+-            send_reply(cret, 1);
+-            break;
+-        }
+-        case SYS_CMD_GET_BOOTMODE: {
+-            TRACE("--- Get bootmode ---");
+-            bootmode = system_get_bootmode();
+-            memcpy(&cret[1], &bootmode, 4);
+-            send_reply(cret, 5);
+-            break;
+-        }
+-        default: {
+-            TRACE("Invalid command: 0x%x", recv_msg.data[0]);
+-            return ERR_SYS_CMD;
+-        }
+-    }
+-
+-    return ERR_NONE;
+-}
+-
+-static enum ERR_CODE handle_data(unsigned char **buf, size_t *len, int *extra)
+-{
+-    enum ERR_CODE errcode = ERR_NONE;
+-#if 0
+-	uint32_t rlen = 0;
+-#endif
+-    *extra = 0;
++extern int uart_send_data(const unsigned char *buf, size_t len);
+ 
+-    // Checksum
+-    if (check_sum((unsigned char *)&recv_msg, MSG_TOTAL_LEN(&recv_msg)) != 0xFF) {
+-        TRACE("Checksum error");
+-        return ERR_CHECKSUM;
+-    }
+-
+-    switch (recv_msg.hdr.type) {
+-        case TYPE_SYS: {
+-            TRACE_TIME("------ SYS CMD ------");
+-            errcode = handle_sys_cmd((enum SYS_CMD_TYPE)recv_msg.data[0], &recv_msg.data[1], recv_msg.hdr.len - 1);
+-            if (errcode != ERR_NONE) {
+-                return errcode;
+-            }
+-            break;
+-        }
+-        case TYPE_READ: {
+-            TRACE_TIME("------ READ CMD ------");
+-#if 0
+-            uint32_t addr = (recv_msg.data[0] << 16) | (recv_msg.data[1] << 8) | recv_msg.data[2];
+-            uint8_t data[4] = {0};
+-            rlen = read_reg(addr, data);
+-            if(rlen == 0)
+-                return ERR_LEN;
+-            else {
+-                send_reply(data, rlen);
+-            }
+-#endif
+-            break;
+-        }
+-        case TYPE_WRITE: {
+-            TRACE_TIME("------ WRITE CMD ------");
+-#if 0
+-            uint32_t addr = (recv_msg.data[0] << 16) | (recv_msg.data[1] << 8) | recv_msg.data[2];
+-            uint32_t wdata = (recv_msg.data[3] << 24) | (recv_msg.data[4] << 16) | (recv_msg.data[5] << 8) | recv_msg.data[6];
+-            uint8_t data[1] = {0};
+-            errcode = write_reg(addr, wdata);
+-            if (errcode != ERR_NONE)
+-                return errcode;
+-            else
+-                send_reply(data, 1);
+-#endif
+-            break;
+-        }
+-
+-        default:
+-            break;
+-    }
+-
+-    return ERR_NONE;
+-}
+-
+-static int parse_packet(unsigned char **buf, size_t *len)
+-{
+-    enum ERR_CODE errcode;
+-    int rlen = *len;
+-    unsigned char *data;
+-    int i;
+-    int extra;
+-    unsigned char cret;
+-
+-    switch (parse_state) {
+-        case PARSE_HEADER:
+-            ASSERT(rlen > 0 && rlen <= sizeof(recv_msg.hdr), "Invalid rlen!");
+-
+-            if (recv_msg.hdr.prefix == PREFIX_CHAR) {
+-                errcode = check_msg_hdr();
+-                if (errcode != ERR_NONE) {
+-                    goto _err;
+-                }
+-                parse_state = PARSE_DATA;
+-                *buf = &recv_msg.data[0];
+-                *len = recv_msg.hdr.len + 1;
+-            } else {
+-                data = (unsigned char *)&recv_msg.hdr.prefix;
+-                for (i = 1; i < rlen; i++) {
+-                    if (data[i] == PREFIX_CHAR) {
+-                        memmove(&recv_msg.hdr.prefix, &data[i], rlen - i);
+-                        break;
+-                    }
+-                }
+-                *buf = &data[rlen - i];
+-                *len = sizeof(recv_msg.hdr) + i - rlen;
+-            }
+-            break;
+-        case PARSE_DATA:
+-            errcode = handle_data(buf, len, &extra);
+-            if (errcode != ERR_NONE) {
+-                goto _err;
+-            }
+-            // Receive next message
+-            reset_parse_state(buf, len);
+-            break;
+-        default:
+-            TRACE("Invalid parse_state: %d", parse_state);
+-            break;
+-    }
+-
+-    return 0;
+-
+-_err:
+-    cancel_input();
+-    cret = (unsigned char)errcode;
+-    send_reply(&cret, 1);
++static enum PARSE_STATE parse_state;
+ 
+-    return 1;
+-}
++#define BUF_SIZE 32*1024+16
++static unsigned char usb_recv_buf[BUF_SIZE] = {0};
+ 
+ void comm_loop(void)
+ {
+     int ret;
+-    unsigned char *buf = NULL;
++    unsigned char *buf = usb_recv_buf;
++    
+     size_t len = 0;
+     size_t buf_len, rlen;
+ 
+ _sync:
+     reset_transport();
+-    reset_parse_state(&buf, &len);
++    //reset_parse_state(&buf, &len);        //这里用了2级指针，会死机
+ 
+     while (1) {
+         rlen = 0;
+@@ -284,22 +38,18 @@ _sync:
+         }
+         buf_len = 0;
+ 
+-        ret = recv_data_ex(buf, buf_len, len, &rlen);
+-        TRACE("[BES_DEBUG]USB buf=%s", buf);
++        ret = recv_data_ex(buf, buf_len, BUF_SIZE, &rlen);
++        TRACE("usb recv: len=%d,rlen=%d.", len,rlen);
++        dump_buffer(buf, rlen);
++        
+         if (ret) {
+             TRACE("Receiving data failed: %d", ret);
+             goto _err;
+         }
+-
+-        if (len != rlen) {
+-            TRACE("Receiving part of the data: expect=%u real=%u", len, rlen);
+-            goto _err;
+-        }
+-
+-        ret = parse_packet(&buf, &len);
+-        if (ret) {
+-            TRACE("Parsing packet failed");
+-            goto _err;
++        else
++        {
++            TRACE("[USB recv]Receiving data success");
++            uart_send_data(buf, rlen);
+         }
+     }
+ 
+diff --git a/apps/factory/app_factory_uart_comm.c b/apps/factory/app_factory_uart_comm.c
+index 0283a8d7ab..15d078b00d 100644
+--- a/apps/factory/app_factory_uart_comm.c
++++ b/apps/factory/app_factory_uart_comm.c
+@@ -4,7 +4,6 @@
+ #include "string.h"
+ #include "stdio.h"
+ #include "tool_msg.h"
+-//#include "sys_api_cdc_comm.h"
+ #include "app_factory_uart_comm.h"
+ #include "hal_uart.h"
+ #include "hal_trace.h"
+@@ -12,6 +11,13 @@
+ #include "hal_bootmode.h"
+ #include "pmu.h"
+ #include "cmsis_os.h"
++#include "hexdump.h"
++
++extern int send_data(const unsigned char *buf, size_t len);
++extern int usb_reopen(void);
++
++extern void hal_iomux_single_wire_uart_rx(void);
++extern void hal_iomux_single_wire_uart_tx(void);
+ 
+ static uint32_t send_timeout;
+ static uint32_t recv_timeout;
+@@ -26,12 +32,6 @@ static void set_send_timeout(unsigned int timeout)
+     send_timeout = timeout;
+ }
+ 
+-extern void system_reboot(void);
+-extern void system_shutdown(void);
+-extern void system_flash_boot(void);
+-extern void system_set_bootmode(unsigned int bootmode);
+-extern void system_clear_bootmode(unsigned int bootmode);
+-extern unsigned int system_get_bootmode(void);
+ 
+ static const unsigned int default_recv_timeout_short = MS_TO_TICKS(500);
+ static const unsigned int default_send_timeout = MS_TO_TICKS(500);
+@@ -55,21 +55,18 @@ static volatile uint32_t uart_dma_rx_size = 0;
+ static bool uart_opened = false;
+ static volatile bool cancel_xfer = false;
+ 
+-static enum PARSE_STATE parse_state;
+ static struct message_t recv_msg;
+-static struct message_t send_msg = { { PREFIX_CHAR, }, };
+-
+ 
+ static const enum HAL_UART_ID_T dld_uart = HAL_UART_ID_0;
+ static const struct HAL_UART_CFG_T uart_cfg = {
+     .parity = HAL_UART_PARITY_NONE,
+     .stop = HAL_UART_STOP_BITS_1,
+     .data = HAL_UART_DATA_BITS_8,
+-    .flow = HAL_UART_FLOW_CONTROL_NONE, //HAL_UART_FLOW_CONTROL_RTSCTS,
++    .flow = HAL_UART_FLOW_CONTROL_NONE,
+     .tx_level = HAL_UART_FIFO_LEVEL_1_2,
+     .rx_level = HAL_UART_FIFO_LEVEL_1_2,
+     .baud = 921600,
+-    .dma_rx = true,
++    .dma_rx = true,         //We use dma recv, so this parameter must be true
+     .dma_tx = false,
+     .dma_rx_stop_on_err = false,
+ };
+@@ -81,28 +78,20 @@ static void uart_rx_dma_handler(uint32_t xfer_size, int dma_error, union HAL_UAR
+         return;
+     }
+     uart_dma_rx_size = xfer_size;
+-    if (dma_error || status.FE || status.OE || status.PE || status.RT || status.BE) {
++    TRACE("status.FE=%d, status.OE=%d, status.PE=%d, status.RT=%d, status.BE=%d.",status.FE, status.OE, status.PE,status.RT,status.BE );
++
++    if(dma_error || /*status.FE ||*/ status.OE || status.PE /*|| status.RT || status.BE*/) {
+         TRACE("UART-RX Error: dma_error=%d, status=0x%08x", dma_error, status.reg);
+         uart_dma_rx_state = UART_DMA_ERROR;
+     } else {
+         uart_dma_rx_state = UART_DMA_DONE;
+-        if (uart_serial_recv_cmp_sem != NULL)
+-        {
++        if (uart_serial_recv_cmp_sem != NULL){
+             osSemaphoreRelease(uart_serial_recv_cmp_sem);
+         }
+     }
+ }
+ 
+-static void uart_break_handler(void)
+-{
+-    TRACE("****** Handle break ******");
+-
+-    cancel_xfer = true;
+-    hal_uart_stop_dma_recv(dld_uart);
+-    hal_uart_stop_dma_send(dld_uart);
+-}
+-
+-void singleline_uart0_open(void)
++void singleline_uart_open(void)
+ {
+     union HAL_UART_IRQ_T mask;
+     if(NULL == uart_serial_recv_cmp_sem) {
+@@ -113,16 +102,20 @@ void singleline_uart0_open(void)
+         hal_uart_open(dld_uart, &uart_cfg);     //open UART0
+         mask.reg = 0;
+         mask.BE = 1;
+-        hal_uart_irq_set_dma_handler(dld_uart, uart_rx_dma_handler, NULL, uart_break_handler);
++        mask.RT = 1;
++        hal_uart_irq_set_dma_handler(dld_uart, uart_rx_dma_handler, NULL, NULL);//uart_break_handler);
+         hal_uart_irq_set_mask(dld_uart, mask);
+         uart_opened = true;
+     }
+ }
+ 
+-static int uart_send_data(const unsigned char *buf, size_t len)
++int uart_send_data(const unsigned char *buf, size_t len)
+ {
+     uint32_t start;
+     uint32_t sent = 0;
++    TRACE("USB recv and send to UART.");
++
++    hal_iomux_single_wire_uart_tx();        //Switch to Tx mode
+ 
+     start = hal_sys_timer_get();
+     while (sent < len) {
+@@ -138,6 +131,10 @@ static int uart_send_data(const unsigned char *buf, size_t len)
+             break;
+         }
+     }
++    //Wait Tx done
++    while (!hal_uart_get_flag(dld_uart).TXFE || hal_uart_get_flag(dld_uart).BUSY);
++    hal_iomux_single_wire_uart_rx();        //Switch to Rx mode
++    hal_uart_flush(dld_uart, 0);            //Clear break singnal
+ 
+     if (sent != len) {
+         return 1;
+@@ -150,7 +147,6 @@ static int uart_recv_data_dma(unsigned char *buf, size_t expect, size_t *rlen)
+ {
+     int ret;
+     union HAL_UART_IRQ_T mask;
+-    //uint32_t start;
+     struct HAL_DMA_DESC_T dma_desc[17];
+     uint32_t desc_cnt = ARRAY_SIZE(dma_desc);
+ 
+@@ -172,13 +168,10 @@ static int uart_recv_data_dma(unsigned char *buf, size_t expect, size_t *rlen)
+     mask.FE = 1;
+     mask.OE = 1;
+     mask.PE = 1;
+-    //mask.RT = 1;
++    mask.RT = 1;
+     hal_uart_irq_set_mask(dld_uart, mask);
+ 
+-    //start = hal_sys_timer_get();
+-    while (uart_dma_rx_state == UART_DMA_START && !cancel_xfer /*&&
+-            (recv_timeout == PGM_TIMEOUT_INFINITE || hal_sys_timer_get() - start < recv_timeout) */&&
+-            TASK_SCHEDULE){
++    while (uart_dma_rx_state == UART_DMA_START && !cancel_xfer && TASK_SCHEDULE){
+         if (NULL != uart_serial_recv_cmp_sem){
+             osSemaphoreWait(uart_serial_recv_cmp_sem, osWaitForever);
+         }
+@@ -226,12 +219,6 @@ static int uart_handle_error(void)
+     return 0;
+ }
+ 
+-static int uart_cancel_input(void)
+-{
+-    hal_uart_flush(dld_uart, 0);
+-    return 0;
+-}
+-
+ void reset_uart_transport(void)
+ {
+     cancel_xfer = false;
+@@ -242,260 +229,14 @@ void reset_uart_transport(void)
+     set_send_timeout(default_send_timeout);
+ }
+ 
+-
+-
+-static unsigned char check_sum(unsigned char *buf, unsigned char len)
+-{
+-    int i;
+-    unsigned char sum = 0;
+-
+-    for (i = 0; i < len; i++) {
+-        sum += buf[i];
+-    }
+-
+-    return sum;
+-}
+-
+-int uart_send_reply(const unsigned char *payload, unsigned int len)
+-{
+-    int ret = 0;
+-
+-    if (len + 1 > sizeof(send_msg.data)) {
+-        TRACE("Packet length too long: %u", len);
+-        return -1;
+-    }
+-
+-    send_msg.hdr.type = recv_msg.hdr.type;
+-    send_msg.hdr.seq = recv_msg.hdr.seq;
+-    send_msg.hdr.len = len;
+-    memcpy(&send_msg.data[0], payload, len);
+-    send_msg.data[len] = ~check_sum((unsigned char *)&send_msg, MSG_TOTAL_LEN(&send_msg) - 1);
+-
+-    ret = uart_send_data((unsigned char *)&send_msg, MSG_TOTAL_LEN(&send_msg));
+-
+-    return ret;
+-}
+-
+ static void reset_parse_state(unsigned char **buf, size_t *len)
+ {
+-    parse_state = PARSE_HEADER;
+     memset(&recv_msg.hdr, 0, sizeof(recv_msg.hdr));
+ 
+     *buf = (unsigned char *)&recv_msg.hdr;
+     *len = sizeof(recv_msg.hdr);
+ }
+ 
+-static enum ERR_CODE check_msg_hdr(void)
+-{
+-    enum ERR_CODE errcode = ERR_NONE;
+-
+-    switch (recv_msg.hdr.type) {
+-        case TYPE_SYS:
+-            if (recv_msg.hdr.len != 1 && recv_msg.hdr.len != 5) {
+-                //TRACE("SYS msg length error: %u", recv_msg.hdr.len);
+-                errcode = ERR_LEN;
+-            }
+-            break;
+-        case TYPE_READ:
+-            if (recv_msg.hdr.len != 4) {
+-                //TRACE("READ msg length error: %u", recv_msg.hdr.len);
+-                errcode = ERR_LEN;
+-            }
+-            break;
+-        case TYPE_WRITE:
+-            if (recv_msg.hdr.len <= 4 || recv_msg.hdr.len > 20) {
+-                //TRACE("WRITE msg length error: %u", recv_msg.hdr.len);
+-                errcode = ERR_LEN;
+-            }
+-            break;
+-        default:
+-            break;
+-    }
+-
+-    if (errcode == ERR_NONE && recv_msg.hdr.len + 1 > sizeof(recv_msg.data)) {
+-        errcode = ERR_LEN;
+-    }
+-
+-    return errcode;
+-}
+-
+-static enum ERR_CODE handle_sys_cmd(enum SYS_CMD_TYPE cmd, unsigned char *param, unsigned int len)
+-{
+-    unsigned char cret[5];
+-    unsigned int bootmode;
+-
+-    cret[0] = ERR_NONE;
+-
+-    if (cmd == SYS_CMD_SET_BOOTMODE || cmd == SYS_CMD_CLR_BOOTMODE) {
+-        if (len != 4) {
+-            TRACE("Invalid SYS CMD len %u for cmd: 0x%x", len, cmd);
+-            return ERR_DATA_LEN;
+-        }
+-    } else {
+-        if (len != 0) {
+-            TRACE("Invalid SYS CMD len %u for cmd: 0x%x", len, cmd);
+-            return ERR_DATA_LEN;
+-        }
+-    }
+-
+-    switch (cmd) {
+-        case SYS_CMD_REBOOT: {
+-            TRACE("--- Reboot---");
+-            uart_send_reply(cret, 1);
+-            system_reboot();
+-            break;
+-        }
+-        case SYS_CMD_SHUTDOWN: {
+-            TRACE("--- Shutdown ---");
+-            uart_send_reply(cret, 1);
+-            system_shutdown();
+-            break;
+-        }
+-        case SYS_CMD_SET_BOOTMODE: {
+-            TRACE("--- Set bootmode ---");
+-            memcpy(&bootmode, param, 4);
+-            system_set_bootmode(bootmode);
+-            uart_send_reply(cret, 1);
+-            break;
+-        }
+-        case SYS_CMD_CLR_BOOTMODE: {
+-            TRACE("--- Clear bootmode ---");
+-            memcpy(&bootmode, param, 4);
+-            system_clear_bootmode(bootmode);
+-            uart_send_reply(cret, 1);
+-            break;
+-        }
+-        case SYS_CMD_GET_BOOTMODE: {
+-            TRACE("--- Get bootmode ---");
+-            bootmode = system_get_bootmode();
+-            memcpy(&cret[1], &bootmode, 4);
+-            uart_send_reply(cret, 5);
+-            break;
+-        }
+-        default: {
+-            TRACE("Invalid command: 0x%x", recv_msg.data[0]);
+-            return ERR_SYS_CMD;
+-        }
+-    }
+-
+-    return ERR_NONE;
+-}
+-
+-static enum ERR_CODE handle_data(unsigned char **buf, size_t *len, int *extra)
+-{
+-    enum ERR_CODE errcode = ERR_NONE;
+-#if 0
+-	uint32_t rlen = 0;
+-#endif
+-    *extra = 0;
+-
+-    // Checksum
+-    if (check_sum((unsigned char *)&recv_msg, MSG_TOTAL_LEN(&recv_msg)) != 0xFF) {
+-        TRACE("Checksum error");
+-        return ERR_CHECKSUM;
+-    }
+-
+-    switch (recv_msg.hdr.type) {
+-        case TYPE_SYS: {
+-            TRACE("------ SYS CMD ------");
+-            errcode = handle_sys_cmd((enum SYS_CMD_TYPE)recv_msg.data[0], &recv_msg.data[1], recv_msg.hdr.len - 1);
+-            if (errcode != ERR_NONE) {
+-                return errcode;
+-            }
+-            break;
+-        }
+-        case TYPE_READ: {
+-            TRACE("------ READ CMD ------");
+-#if 0
+-            uint32_t addr = (recv_msg.data[0] << 16) | (recv_msg.data[1] << 8) | recv_msg.data[2];
+-            uint8_t data[4] = {0};
+-            rlen = read_reg(addr, data);
+-            if(rlen == 0)
+-                return ERR_LEN;
+-            else {
+-                uart_send_reply(data, rlen);
+-            }
+-#endif
+-            break;
+-        }
+-        case TYPE_WRITE: {
+-            TRACE("------ WRITE CMD ------");
+-#if 0
+-            uint32_t addr = (recv_msg.data[0] << 16) | (recv_msg.data[1] << 8) | recv_msg.data[2];
+-            uint32_t wdata = (recv_msg.data[3] << 24) | (recv_msg.data[4] << 16) | (recv_msg.data[5] << 8) | recv_msg.data[6];
+-            uint8_t data[1] = {0};
+-            errcode = write_reg(addr, wdata);
+-            if (errcode != ERR_NONE)
+-                return errcode;
+-            else
+-                uart_send_reply(data, 1);
+-#endif
+-            break;
+-        }
+-
+-        default:
+-            break;
+-    }
+-
+-    return ERR_NONE;
+-}
+-
+-static int parse_packet(unsigned char **buf, size_t *len)
+-{
+-    enum ERR_CODE errcode;
+-    int rlen = *len;
+-    unsigned char *data;
+-    int i;
+-    int extra;
+-    unsigned char cret;
+-
+-    switch (parse_state) {
+-        case PARSE_HEADER:
+-            ASSERT(rlen > 0 && rlen <= sizeof(recv_msg.hdr), "Invalid rlen!");
+-
+-            if (recv_msg.hdr.prefix == PREFIX_CHAR) {
+-                errcode = check_msg_hdr();
+-                if (errcode != ERR_NONE) {
+-                    goto _err;
+-                }
+-                parse_state = PARSE_DATA;
+-                *buf = &recv_msg.data[0];
+-                *len = recv_msg.hdr.len + 1;
+-            } else {
+-                data = (unsigned char *)&recv_msg.hdr.prefix;
+-                for (i = 1; i < rlen; i++) {
+-                    if (data[i] == PREFIX_CHAR) {
+-                        memmove(&recv_msg.hdr.prefix, &data[i], rlen - i);
+-                        break;
+-                    }
+-                }
+-                *buf = &data[rlen - i];
+-                *len = sizeof(recv_msg.hdr) + i - rlen;
+-            }
+-            break;
+-        case PARSE_DATA:
+-            errcode = handle_data(buf, len, &extra);
+-            if (errcode != ERR_NONE) {
+-                goto _err;
+-            }
+-            // Receive next message
+-            reset_parse_state(buf, len);
+-            break;
+-        default:
+-            TRACE("Invalid parse_state: %d", parse_state);
+-            break;
+-    }
+-
+-    return 0;
+-
+-_err:
+-    uart_cancel_input();
+-    cret = (unsigned char)errcode;
+-    uart_send_reply(&cret, 1);
+-
+-    return 1;
+-}
+-
+ void uart_loop(void)
+ {
+     int ret;
+@@ -506,34 +247,25 @@ void uart_loop(void)
+ _sync:
+     reset_uart_transport();
+     reset_parse_state(&buf, &len);
++    usb_reopen();
++    hal_iomux_single_wire_uart_rx();        //Switch to UART rx when bootup once
+ 
+     while (1) {
+         rlen = 0;
+-        if (parse_state == PARSE_HEADER) {
+-            set_recv_timeout(default_recv_timeout_idle);
+-        } else {
+-            set_recv_timeout(default_recv_timeout_short);
+-        }
+-
+         set_recv_timeout(default_recv_timeout_idle);
+ 
+         //ret = recv_data_ex(buf, buf_len, len, &rlen);
+-        ret = uart_recv_data_dma(buf, len, &rlen);
+-        TRACE("end and buf=%s",buf);
++        ret = uart_recv_data_dma(buf, 64, &rlen);
++        TRACE("uart recv: len=%d,rlen=%d.", len,rlen);
++        dump_buffer(buf, rlen);
++        
+         if (ret) {
+             TRACE("Receiving data failed: %d", ret);
+             goto _err;
+         }
+-
+-        if (len != rlen) {
+-            TRACE("Receiving part of the data: expect=%u real=%u", len, rlen);
+-            goto _err;
+-        }
+-
+-        ret = parse_packet(&buf, &len);
+-        if (ret) {
+-            TRACE("Parsing packet failed");
+-            goto _err;
++        else{
++            TRACE("[UART recv]Receiving data success");
++            send_data(buf,rlen);
+         }
+     }
+ 
+diff --git a/apps/factory/app_factory_uart_comm.h b/apps/factory/app_factory_uart_comm.h
+index 1d16ea2969..ce1dffbd28 100644
+--- a/apps/factory/app_factory_uart_comm.h
++++ b/apps/factory/app_factory_uart_comm.h
+@@ -7,11 +7,8 @@ extern "C" {
+ 
+ void uart_loop(void);
+ 
+-int uart_send_reply(const unsigned char *payload, unsigned int len);
+-
+-
+ void reset_transport(void);
+-void singleline_uart0_open(void);
++void singleline_uart_open(void);
+ 
+ 
+ #ifdef __cplusplus
+diff --git a/apps/factory/singleline_uart_thread.c b/apps/factory/singleline_uart_thread.c
+index 56d20fd0d3..cf352855f0 100644
+--- a/apps/factory/singleline_uart_thread.c
++++ b/apps/factory/singleline_uart_thread.c
+@@ -30,8 +30,7 @@ void singleline_uart_create_thread(void)
+ {
+     TRACE("%s %d\n", __func__, __LINE__);
+     
+-    if(NULL == uart_tid)
+-    {
++    if(NULL == uart_tid){
+         uart_tid = osThreadCreate(osThread(uart_thread), NULL);
+     }
+ }
+@@ -39,8 +38,7 @@ void singleline_uart_create_thread(void)
+ void uart_close_thread(void)
+ {
+     TRACE("%s %d\n", __func__, __LINE__);
+-    if(uart_tid)
+-    {
++    if(uart_tid){
+         osThreadTerminate(uart_tid);
+         uart_tid = NULL;
+     }
+@@ -50,7 +48,7 @@ static void uart_thread(const void *arg)
+ {
+     TRACE("%s enter %d\n",__func__,__LINE__);
+ 
+-    singleline_uart0_open();
++    singleline_uart_open();
+ 
+     while(1){
+         uart_loop();
+diff --git a/apps/factory/sys_api_cdc_comm.c b/apps/factory/sys_api_cdc_comm.c
+index e2687dc2e1..c45283cc59 100644
+--- a/apps/factory/sys_api_cdc_comm.c
++++ b/apps/factory/sys_api_cdc_comm.c
+@@ -95,6 +95,7 @@ int send_data(const unsigned char *buf, size_t len)
+     if (cancel_xfer) {
+         return -1;
+     }
++    TRACE("UART recv and send to USB");
+     return usb_send_data(buf, len);
+ }
+ 
+diff --git a/config/reliability_test/target.mk b/config/reliability_test/target.mk
+index b80fb25413..4adcb5972b 100644
+--- a/config/reliability_test/target.mk
++++ b/config/reliability_test/target.mk
+@@ -13,6 +13,7 @@ WATCHER_DOG ?= 0
+ export RELIABILITY_TEST	?= 1
+ # enable:1
+ # disable:0
++export USB_HIGH_SPEED ?= 1
+ 
+ export BT_USBCDC_MODE ?= 1
+ ifeq ($(BT_USBCDC_MODE),1)
+diff --git a/platform/drivers/usb/usb_dev/inc/usb_cdc.h b/platform/drivers/usb/usb_dev/inc/usb_cdc.h
+index 7d00e47d97..a553f0b599 100644
+--- a/platform/drivers/usb/usb_dev/inc/usb_cdc.h
++++ b/platform/drivers/usb/usb_dev/inc/usb_cdc.h
+@@ -67,6 +67,7 @@ struct USB_SERIAL_CFG_T {
+ int usb_serial_open(const struct USB_SERIAL_CFG_T *cfg);
+ 
+ int usb_serial_reopen(void (*break_handler)(void));
++int usb_reopen(void);
+ 
+ void usb_serial_close(void);
+ 
+diff --git a/platform/drivers/usb/usb_dev/src/usb_cdc.c b/platform/drivers/usb/usb_dev/src/usb_cdc.c
+index ee40580853..02ea182751 100644
+--- a/platform/drivers/usb/usb_dev/src/usb_cdc.c
++++ b/platform/drivers/usb/usb_dev/src/usb_cdc.c
+@@ -160,6 +160,13 @@ int usb_serial_reopen(void (*break_handler)(void))
+     return hal_usb_reopen(&cdc_callbacks, DEFAULT_CONFIGURATION, 0, 0);
+ }
+ 
++int usb_reopen(void)
++{
++    terminal_connected = true;
++    usb_serial_init_xfer();
++    return hal_usb_reopen(&cdc_callbacks, DEFAULT_CONFIGURATION, 0, 0);
++}
++
+ void usb_serial_close(void)
+ {
+     if(NULL != usb_serial_recv_cmp_sem) {
+@@ -244,6 +251,7 @@ int usb_serial_recv(uint8_t *buf, uint32_t size, uint8_t recv_mode, uint32_t *re
+     int ret = 0;
+     uint32_t copy_size;
+     uint32_t pos = 0;
++    //uint32_t time;
+ 
+     if (cancel_recv) {
+         return USB_ERR_RXTX_CANCEL;
+@@ -294,8 +302,9 @@ int usb_serial_recv(uint8_t *buf, uint32_t size, uint8_t recv_mode, uint32_t *re
+                 goto _exit;
+             }
+             CDC_TRACE(0, "%s %d  %d-%d-%d",__func__,__LINE__,bulk_recv_state,cancel_recv,TASK_SCHEDULE);
++            //time = hal_sys_timer_get();
+             while (bulk_recv_state == XFER_START && !cancel_recv && TASK_SCHEDULE){
+-                if (NULL != usb_serial_recv_cmp_sem) {
++                 if (NULL != usb_serial_recv_cmp_sem) {
+                     osSemaphoreWait(usb_serial_recv_cmp_sem, osWaitForever);                    
+                 }
+             };
+@@ -547,24 +556,19 @@ int usb_serial_send(const uint8_t *buf, uint32_t size)
+     if (!terminal_connected) {
+         return USB_ERR_NOT_CONNECT;
+     }
+-
+     if (cancel_send) {
+         return USB_ERR_RXTX_CANCEL;
+     }
+-
+     if (buf == NULL || size == 0) {
+         return USB_ERR_INV_PARAM;
+     }
+-
+     if (set_bool_flag(&send_locked)) {
+         return USB_ERR_NOT_LOCK;
+     }
+-
+     if (bulk_send_state != XFER_IDLE) {
+         ret = USB_ERR_NOT_IDLE;
+         goto _no_state_exit;
+     }
+-
+     if (size % CDC_MPS_EPBULK == 0) {
+         send_zlp = true;
+     } else {
+@@ -580,7 +584,6 @@ int usb_serial_send(const uint8_t *buf, uint32_t size)
+         } else {
+             xfer = 0;
+         }
+-
+         if (xfer == 0) {
+             if (!send_zlp) {
+                 break;
+@@ -590,7 +593,6 @@ int usb_serial_send(const uint8_t *buf, uint32_t size)
+         } else if (xfer > BULK_SEND_SIZE) {
+             xfer = BULK_SEND_SIZE;
+         }
+-
+         bulk_send_state = XFER_START;
+         if (xfer > 0) {
+             memcpy(txbuf, buf + bulk_send_size, xfer);
+@@ -776,24 +778,27 @@ static bool cdc_setuprecv_handler(struct EP0_TRANSFER *transfer)
+     CDC_FUNC_ENTRY_TRACE(1);
+ 
+     /* Process class-specific requests */
++    CDC_TRACE(0,"type=%d, bRequest=%d",transfer->setup_pkt.bmRequestType.type,transfer->setup_pkt.bRequest );
+ 
+     if (transfer->setup_pkt.bmRequestType.type == CLASS_TYPE) {
+         switch (transfer->setup_pkt.bRequest) {
+-            case CDC_GET_LINE_CODING:
++            case CDC_GET_LINE_CODING:            //33
+                 transfer->length = 7;
+                 transfer->data = cdc_line_coding;
+                 transfer->stage = DATA_IN_STAGE;
+                 success = true;
+                 break;
+-            case CDC_SET_LINE_CODING:
++            case CDC_SET_LINE_CODING:           //32
+                 transfer->length = 7;
+                 transfer->stage = DATA_OUT_STAGE;
+                 success = true;
+                 break;
+-            case CDC_SET_CONTROL_LINE_STATE:
++            case CDC_SET_CONTROL_LINE_STATE:    //34
+                 if (transfer->setup_pkt.wValue & CLS_DTR) {
++                    CDC_TRACE(0,"001 cls_dtr_state=%d",cls_dtr_state);
+                     terminal_connected = cls_dtr_state ? true : false;
+                 } else {
++                    CDC_TRACE(0,"002 cls_dtr_state=%d",cls_dtr_state);
+                     terminal_connected = cls_dtr_state ? false : true;
+                 }
+                 transfer->stage = STATUS_IN_STAGE;
+@@ -1082,7 +1087,7 @@ static bool epbulk_recv_compl_handler(const uint8_t *data, uint32_t length, enum
+ 
+     CDC_TRACE(0, "%s: len=%d state=%d recv_state=%d", __FUNCTION__, length, state, bulk_recv_state);
+ 
+-    if (bulk_recv_state != XFER_START) {
++    if (bulk_recv_state != XFER_START) {    //1
+         // recv has been cancelled
+         return true;
+     }
+diff --git a/platform/hal/best2300/hal_iomux_best2300.c b/platform/hal/best2300/hal_iomux_best2300.c
+index 2b7c2f17d6..24c4161acf 100644
+--- a/platform/hal/best2300/hal_iomux_best2300.c
++++ b/platform/hal/best2300/hal_iomux_best2300.c
+@@ -989,3 +989,31 @@ enum HAL_PWRKEY_IRQ_T WEAK hal_pwrkey_get_irq_state(void)
+     return state;
+ }
+ 
++void hal_iomux_single_wire_uart_rx(void)
++{
++    const struct HAL_IOMUX_PIN_FUNCTION_MAP pinmux_uart_0_rx[] =
++    {
++        {HAL_IOMUX_PIN_P1_7, HAL_IOMUX_FUNC_GPIO, HAL_IOMUX_PIN_VOLTAGE_VIO, HAL_IOMUX_PIN_PULLUP_ENALBE},     //TX as GPIO
++        {HAL_IOMUX_PIN_P1_6, HAL_IOMUX_FUNC_UART0_RX, HAL_IOMUX_PIN_VOLTAGE_VIO, HAL_IOMUX_PIN_PULLUP_ENALBE}, //RX
++    };
++
++    hal_gpio_pin_set_dir((enum HAL_GPIO_PIN_T)pinmux_uart_0_rx[0].pin, HAL_GPIO_DIR_IN, 1);//rx
++    hal_gpio_pin_set_dir((enum HAL_GPIO_PIN_T)pinmux_uart_0_rx[1].pin, HAL_GPIO_DIR_IN, 1);
++
++    hal_iomux_init((struct HAL_IOMUX_PIN_FUNCTION_MAP *)&pinmux_uart_0_rx, 2);
++}
++
++void hal_iomux_single_wire_uart_tx(void)
++{
++    const struct HAL_IOMUX_PIN_FUNCTION_MAP pinmux_uart_0_tx[] =
++    {
++        {HAL_IOMUX_PIN_P1_6, HAL_IOMUX_FUNC_GPIO, HAL_IOMUX_PIN_VOLTAGE_VIO, HAL_IOMUX_PIN_PULLUP_ENALBE},        //RX as GPIO
++        {HAL_IOMUX_PIN_P1_7, HAL_IOMUX_FUNC_UART0_TX, HAL_IOMUX_PIN_VOLTAGE_VIO, HAL_IOMUX_PIN_PULLUP_ENALBE},    //TX
++    };
++
++    hal_gpio_pin_set_dir((enum HAL_GPIO_PIN_T)pinmux_uart_0_tx[0].pin, HAL_GPIO_DIR_IN, 1);//tx
++    hal_gpio_pin_set_dir((enum HAL_GPIO_PIN_T)pinmux_uart_0_tx[1].pin, HAL_GPIO_DIR_IN, 1);
++
++    hal_iomux_init((struct HAL_IOMUX_PIN_FUNCTION_MAP *)&pinmux_uart_0_tx, 2);
++}
++
+diff --git a/platform/hal/best2300/hal_iomux_best2300.h b/platform/hal/best2300/hal_iomux_best2300.h
+index fea8e01c13..4768439057 100644
+--- a/platform/hal/best2300/hal_iomux_best2300.h
++++ b/platform/hal/best2300/hal_iomux_best2300.h
+@@ -210,6 +210,9 @@ void hal_iomux_set_mcu_clock_out(void);
+ 
+ void hal_iomux_set_bt_clock_out(void);
+ 
++void hal_iomux_single_wire_uart_rx(void);
++void hal_iomux_single_wire_uart_tx(void);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/tests/reliability_test/main.cpp b/tests/reliability_test/main.cpp
+index dad5244a3e..097a14901e 100644
+--- a/tests/reliability_test/main.cpp
++++ b/tests/reliability_test/main.cpp
+@@ -851,8 +851,8 @@ int main(int argc, char *argv[])
+     hal_cmu_simu_init();
+ 
+     //reliabilty_tester_loop();
+-    app_cdc_comm_open();
+-    singleline_uart_create_thread();
++    app_cdc_comm_open();                //USB recv thread
++    singleline_uart_create_thread();    //URAT recv thread
+ 
+     //pmu_shutdown();
+ 
