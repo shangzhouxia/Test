@@ -29,6 +29,7 @@ void main(void)
 
     int size = sizeof(array)/sizeof(array[0]);
 
+    printf("Original array:\n");
     for (int i=0; i<size; i++) {
         printf("%d ", array[i]);
     }
