@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "kernel.h": "c",
+        "module.h": "c",
+        "kobject.h": "c",
+        "slab.h": "c"
+    }
+}

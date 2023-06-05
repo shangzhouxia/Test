@@ -1,0 +1,20 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/home/zgl/WSL2-Linux-Kernel-linux-msft-wsl-5.10.16.3/include",
+                "/home/zgl/WSL2-Linux-Kernel-linux-msft-wsl-5.10.16.3/include/linux",
+                "/home/zgl/WSL2-Linux-Kernel-linux-msft-wsl-5.10.16.3/arch/arm64/include"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/bin/gcc",
+            "cStandard": "c11",
+            "cppStandard": "gnu++14",
+            "intelliSenseMode": "linux-gcc-x64",
+            "configurationProvider": "ms-vscode.makefile-tools"
+        }
+    ],
+    "version": 4
+}
