@@ -1,1 +1,0 @@
-cmd_/home/rlk/Github_/Test/kset/kset-example/kset-example.ko := ld -r -m elf_x86_64  -z max-page-size=0x200000  --build-id  -T ./scripts/module-common.lds -o /home/rlk/Github_/Test/kset/kset-example/kset-example.ko /home/rlk/Github_/Test/kset/kset-example/kset-example.o /home/rlk/Github_/Test/kset/kset-example/kset-example.mod.o;  true
