@@ -1,0 +1,1 @@
+cmd_/home/rlk/Github_/Test/kset/kobject-example/kobject-example.ko := ld -r -m elf_x86_64  -z max-page-size=0x200000  --build-id  -T ./scripts/module-common.lds -o /home/rlk/Github_/Test/kset/kobject-example/kobject-example.ko /home/rlk/Github_/Test/kset/kobject-example/kobject-example.o /home/rlk/Github_/Test/kset/kobject-example/kobject-example.mod.o;  true
