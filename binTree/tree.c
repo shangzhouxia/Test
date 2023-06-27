@@ -4,8 +4,8 @@
 #include "tree.h"
 
 typedef struct pair {
-    TreeNode* parent;
-    TreeNode* theOne;
+    TreeNode* parent;   //指向父节点
+    TreeNode* theOne;   //指向包含项的节点
 } Pair;
 
 /* 创建一个新节点 
@@ -29,6 +29,7 @@ static TreeNode* MakeNode(const Item* pItem);
 static bool ToLeft(const Item* item1, const Item* item2);
 static bool ToRight(const Item* item1, const Item* item2);
 
+//确定新节点的位置并添加新节点
 static void AddNode(TreeNode* newNode, TreeNode* root);
 
 //中序遍历二叉树: 左、中、右
@@ -103,7 +104,7 @@ bool AddItem(const Item* pItem, Tree* pTree)
 
 //(5)找到适合新节点的位置
     if (!pTree->root) {
-        pTree->root = new_node;         //case: 根节点为空，此时初始化根节点
+        pTree->root = new_node;         //case: 根节点为空，此时初始化根节点指向新节点
     } else {
         AddNode(new_node, pTree->root); //case: 根节点不为空，在tree中添加新节点
     }
@@ -128,15 +129,15 @@ bool DeleteItem(const Item* pItem, Tree* pTree)
     Pair look;
 
     look = SeekItem(pItem, pTree);
-    if (look.theOne == NULL) {
+    if (look.theOne == NULL) {          //没有找到指定项
         return false;
     }
 
     if (look.parent == NULL) {          //要删除的item对应的是root
         DeleteNode(&pTree->root);
-    } else if (look.parent->left == look.theOne) {
+    } else if (look.parent->left == look.theOne) {      //要删除的是父节点的左节点
         DeleteNode(&look.parent->left);
-    } else {
+    } else {                            //要删除的是父节点的右节点
         DeleteNode(&look.parent->right);
     }
 
@@ -170,7 +171,7 @@ Pair SeekItem(const Item* pItem, const Tree* pTree)
     Pair look;
 
     look.parent = NULL;                 //初始化为NULL(root没有父节点)
-    look.theOne = pTree->root;           //初始化child指向根节点
+    look.theOne = pTree->root;          //初始化指向根节点
 
     if (!look.theOne) {
         return look;                    //root节点为NULL，树还没有初始化，直接return
@@ -178,13 +179,13 @@ Pair SeekItem(const Item* pItem, const Tree* pTree)
 
     while (look.theOne) {
         if (ToLeft(pItem, &(look.theOne->item))) {
-            look.parent = look.theOne;           //更新父节点
+            look.parent = look.theOne;            //更新父节点
             look.theOne = look.theOne->left;      //更新子节点为左子树
         } else if (ToRight(pItem, &(look.theOne->item))) {
             look.parent = look.theOne;
             look.theOne = look.theOne->right;
         } else {
-            break;              //ToLeft和ToRight条件都不满足，即找到了Item
+            break;    //既不在左子树也不在右子树，那么当前项就是匹配的
         }
     }
 
@@ -277,7 +278,7 @@ void DeleteNode(TreeNode** pNode)
             continue;
         }
 
-        //
+        //链接待删除节点右子树
         temp->right = cur->right;
         temp = cur;
 
@@ -290,7 +291,7 @@ void Inorder(const TreeNode* root, void (*pfunc)(Item item))
 {
     if (root != NULL) {
         Inorder(root->left, pfunc);
-        pfunc(root->item);
+        pfunc(root->item);              //回调函数
         Inorder(root->right, pfunc);
     }
 }

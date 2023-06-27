@@ -7,16 +7,21 @@
 #define     SLEN        20
 
 typedef struct item {
-    char petname[SLEN];
-    char petkind[SLEN];
+    char petname[SLEN];             //宠物名字
+    char petkind[SLEN];             //宠物类型
 } Item;
 
 typedef struct treenode {
-    Item item;
+    Item item;                      //树节点具体的内容
     struct treenode* left;          //指向左子树
     struct treenode* right;         //指向右子树
 } TreeNode;
 
+
+/* 
+关注的是整棵树，即只需关注根节点即可 
+对外的API参数基本都是Tree，TreeNode是隐藏的
+*/
 typedef struct tree {
     TreeNode* root;                 //指向根节点指针
     int tSize;                      //树的项数
