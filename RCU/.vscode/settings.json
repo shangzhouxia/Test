@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "module.h": "c",
+        "kthread.h": "c",
+        "rculist.h": "c"
+    }
+}
