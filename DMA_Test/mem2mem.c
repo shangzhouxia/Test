@@ -1,229 +1,256 @@
-#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/moduleparam.h>
+#include <linux/types.h>
+#include <linux/string.h>
+#include <linux/miscdevice.h>
 #include <linux/fs.h>
 #include <linux/init.h>
-#include <linux/module.h>
-#include <linux/device.h>
-#include <linux/cdev.h>
-#include <linux/wait.h>
-#include <linux/string.h>
-#include <linux/slab.h>
-#include <linux/jiffies.h>
-
-
-#include <linux/dma-mapping.h>
+#include <asm/uaccess.h>
 #include <linux/dmaengine.h>
 
 
-#define MEMCPY_NO_DMA   0
-#define MEMCPY_DMA      1
-#define BUFFER_SIZE     (10 * 1024)
+#define DRIVER_NAME             "axidma"
+#define AXIDMA_IOC_MAGIC        'A'
+#define AXIDMA_IOCGETCHN        _IO(AXIDMA_IOC_MAGIC, 0)
+#define AXIDMA_IOCCFGANDSTART   _IO(AXIDMA_IOC_MAGIC, 1)
+#define AXIDMA_IOCGETSTATUS     _IO(AXIDMA_IOC_MAGIC, 2)
+#define AXIDMA_IOCRELEASECHN    _IO(AXIDMA_IOC_MAGIC, 3)
 
 
-struct cdev my_cdev;
-static int major_ret;
-static struct class* pdma_class;
-static struct device* pdma_device;
+#define AXI_DMA_MAX_CHANS       8
+#define DMA_CHN_UNUSED          0
+#define DMA_CHN_USED            1
 
 
-static dma_addr_t* src = NULL;
-static dma_addr_t src_phys;
-static dma_addr_t* dst = NULL;
-static dma_addr_t dst_phys;
-
-static volatile int dma_finished = 0;
-static DECLARE_WAIT_QUEUE_HEAD(wq);
-
-
-static int do_memcpy_with_dma(void);
-static void do_memcpy_no_dma(void);
-void demo_dma_callback(void *dma_async_param);
-
-
-static long demo_ioctl(struct file * file, unsigned int cmd, unsigned long data)
-{
-    switch (cmd) {
-        case MEMCPY_NO_DMA:
-            do_memcpy_no_dma();
-            break;
-        case MEMCPY_DMA:
-            do_memcpy_with_dma();
-            break;
-        default:
-            printk("%s undefined command.\n", __func__);
-            break;
-    }
-
-    return 0;
-}
-
-static const struct file_operations fops = {
-    .owner = THIS_MODULE,
-    .unlocked_ioctl = demo_ioctl,
+struct axidma_chncfg {
+    unsigned int src_addr;
+    unsigned int dst_addr;
+    unsigned int len;
+    unsigned char chn_num;
+    unsigned char status;
+    unsigned char reserve[2];
+    unsigned int reserve2;
 };
 
 
-static int __init demo_init(void)
+struct axidma_chns {
+    struct dma_chan *dma_chan;
+    unsigned char used;
+#define DMA_STATUS_UNFINISHED   0
+#define DMA_STATUS_FINISHED     1
+    unsigned char status;
+    unsigned char reserve[2];
+};
+
+struct axidma_chns channels[AXI_DMA_MAX_CHANS];
+
+
+static int axidma_open(struct inode *inode, struct file *file)
 {
-    int ret;
-    dev_t devno = 0;
-
-    printk("%s Start.\n", __func__);
-
-    ret = alloc_chrdev_region(&devno, 0, 1, "dma_test");
-    if (0 != ret) {
-        printk("alloc_chrdev_region error\n");
-        return ret;
-    }
-
-    major_ret = MAJOR(devno);
-    cdev_init(&my_cdev, &fops);
-    ret = cdev_add(&my_cdev, devno, 1);
-    if (0 != ret) {
-        printk("cdev_add error\n");
-        return ret;
-    }
-
-    pdma_class = class_create(THIS_MODULE, "dma_test_class");
-    pdma_device = device_create(pdma_class, NULL, MKDEV(major_ret, 0), NULL, "dma_test");
-
-    src = dma_alloc_coherent(NULL, BUFFER_SIZE, &src_phys, GFP_ATOMIC);
-    if (NULL == src) {
-        printk("dma_alloc_coherent src error\n");
-        goto failed_alloc_src;
-    }
-
-    dst = dma_alloc_coherent(NULL, BUFFER_SIZE, &dst_phys, GFP_ATOMIC);
-    if (NULL == dst) {
-        printk("dma_alloc_coherent src error\n");
-        goto failed_alloc_dst;
-    }
-
-    printk("%s Done.\n", __func__);
+    printk("Open: do nothing\n");
     return 0;
-
-failed_alloc_dst:
-    dma_free_coherent(NULL, BUFFER_SIZE, src, src_phys);
-
-failed_alloc_src:
-    device_destroy(pdma_class, MKDEV(major_ret, 0));
-    class_destroy(pdma_class);
-
-    cdev_del(&my_cdev);
-    unregister_chrdev_region(MKDEV(major_ret, 0), 1);
-
-    return -1;
 }
 
 
-static void __exit demo_exit(void)
+static int axidma_release(struct inode *inode, struct file *file)
 {
-    printk("%s Start.\n", __func__);
-
-    device_destroy(pdma_class, MKDEV(major_ret, 0));
-    class_destroy(pdma_class);
-
-    cdev_del(&my_cdev);
-    unregister_chrdev_region(MKDEV(major_ret, 0), 1);
-
-    dma_free_coherent(NULL, BUFFER_SIZE, src, src_phys);
-    dma_free_coherent(NULL, BUFFER_SIZE, dst, dst_phys);
-
-    printk("%s Done.\n", __func__);
+    printk("Release: do nothing\n");
+    return 0;
 }
 
-void demo_dma_callback(void *dma_async_param)
-{
-    printk("%s.\n", __func__);
 
-    dma_finished = 1;
-    wake_up_interruptible(&wq);
+static ssize_t axidma_write(struct file *file, const char __user *data, size_t len, loff_t *ppos)
+{
+    printk("Write: do nothing\n");
+    return 0;
 }
 
-static int do_memcpy_with_dma(void)
+
+static void dma_complete_func(void *status)
 {
-    struct dma_chan* chan = NULL;
+    *(char *)status = DMA_STATUS_FINISHED;
+    printk("dma_complete!\n");
+}
+
+
+static long axidma_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    struct dma_device *dma_dev;
+    struct dma_async_tx_descriptor *tx = NULL;
     dma_cap_mask_t mask;
-    struct dma_async_tx_descriptor* tx_desc = NULL;
-    dma_cookie_t dma_cooike;
-
-    unsigned long t1, t2, diff, msec;
+    dma_cookie_t cookie;
+    enum dma_ctrl_flags flags;
+    struct axidma_chncfg chncfg;
+    int ret = -1;
     int i;
 
-    printk("%s Start.\n", __func__);
+    memset(&chncfg, 0, sizeof(struct axidma_chncfg));
 
-    memset(src, 0xAA, BUFFER_SIZE);
-    memset(dst, 0x55, BUFFER_SIZE);
+    switch (cmd) {
+        case AXIDMA_IOCGETCHN:
+        {
+            for (i = 0; i < AXI_DMA_MAX_CHANS; i++) {
+                if (DMA_CHN_UNUSED == channels[i].used)
+                    break;
+            }
 
-    dma_cap_zero(mask);
-    dma_cap_set(DMA_MEMCPY, mask);
+            if (AXI_DMA_MAX_CHANS == i) {
+                printk("Get dma chn failed, because no idle channel\n");
+                goto error;
+            } else {
+                channels[i].used = DMA_CHN_USED;
+                channels[i].status = DMA_STATUS_UNFINISHED;
+                chncfg.chn_num = i;
+                chncfg.status = DMA_STATUS_UNFINISHED;
+            }
 
-    chan = dma_request_channel(mask, NULL, NULL);
-    if (NULL == chan) {
-        printk("%s dma_request_channel failed.\n", __func__);
-        return -1;
-    }
+            dma_cap_zero(mask);
+            dma_cap_set(DMA_MEMCPY, mask);
 
-    t1 = jiffies;
-    for (i=0; i<1000; i++) {
-        dma_finished = 0;
+            channels[i].dma_chan = dma_request_channel(mask, NULL, NULL);
 
-        tx_desc = dmaengine_prep_dma_memcpy(chan, dst_phys, src_phys, BUFFER_SIZE, DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
-        if (NULL == tx_desc) {
-            printk("%s get tx descriptor failed.\n", __func__);
-            dma_release_channel(chan);
-            return -1;
+            if (!channels[i].dma_chan) {
+                printk("dma request channel failed\n");
+                channels[i].used = DMA_CHN_UNUSED;
+                goto error;
+            }
+
+            ret = copy_to_user((void __user *)arg, &chncfg, sizeof(struct axidma_chncfg));
+            if (ret) {
+                printk("Copy to user failed\n");
+                goto error;
+            }
         }
+        break;
 
-        tx_desc->callback = demo_dma_callback;
+        case AXIDMA_IOCCFGANDSTART:
+        {
+            ret = copy_from_user(&chncfg, (void __user *)arg, sizeof(struct axidma_chncfg));
+            if (ret) {
+                printk("Copy from user failed\n");
+                goto error;
+            }
 
-        dma_cooike = dmaengine_submit(tx_desc);
-        if (dma_submit_error(dma_cooike)) {
-            printk("%s dmaengine_submit error.\n", __func__);
-            dma_release_channel(chan);
-            return -2;
+            if ((chncfg.chn_num >= AXI_DMA_MAX_CHANS) || (!channels[chncfg.chn_num].dma_chan)) {
+                printk("chn_num[%d] is invalid\n", chncfg.chn_num);
+                goto error;
+            }
+
+            dma_dev = channels[chncfg.chn_num].dma_chan->device;
+
+            flags = DMA_CTRL_ACK | DMA_PREP_INTERRUPT;
+
+            tx = dma_dev->device_prep_dma_memcpy(channels[chncfg.chn_num].dma_chan, chncfg.dst_addr, chncfg.src_addr, chncfg.len, flags);
+            if (!tx) {
+                printk("Failed to prepare DMA memcpy\n");
+                goto error;
+            }
+
+            tx->callback = dma_complete_func;
+            channels[chncfg.chn_num].status = DMA_STATUS_UNFINISHED;
+            tx->callback_param = &channels[chncfg.chn_num].status;
+            cookie = tx->tx_submit(tx);
+            if (dma_submit_error(cookie)) {
+                printk("Failed to dma tx_submit\n");
+                goto error;
+            }
+
+            dma_async_issue_pending(channels[chncfg.chn_num].dma_chan);
         }
+        break;
 
-        dma_async_issue_pending(chan);
-        wait_event_interruptible(wq, dma_finished);
+        case AXIDMA_IOCGETSTATUS:
+        {
+            ret = copy_from_user(&chncfg, (void __user *)arg, sizeof(struct axidma_chncfg));            
+            if (ret) {
+                printk("Copy from user failed\n");
+                goto error;
+            }
 
+            if (chncfg.chn_num >= AXI_DMA_MAX_CHANS) {
+                printk("chn_num[%d] is invalid\n", chncfg.chn_num);
+                goto error;
+            }
+
+            chncfg.status = channels[chncfg.chn_num].status;            
+            ret = copy_to_user((void __user *)arg, &chncfg, sizeof(struct axidma_chncfg));          
+            if (ret) {
+                printk("Copy to user failed\n");
+                goto error;
+            }
+        }
+        break;
+
+        case AXIDMA_IOCRELEASECHN:
+        {
+
+            ret = copy_from_user(&chncfg, (void __user *)arg, sizeof(struct axidma_chncfg));
+            if (ret) {
+                printk("Copy from user failed\n");              
+                goto error;
+            }
+
+            if ((chncfg.chn_num >= AXI_DMA_MAX_CHANS) || (!channels[chncfg.chn_num].dma_chan)) {
+                printk("chn_num[%d] is invalid\n", chncfg.chn_num);             
+                goto error;
+            }
+
+            dma_release_channel(channels[chncfg.chn_num].dma_chan);
+
+            channels[chncfg.chn_num].used = DMA_CHN_UNUSED;         
+            channels[chncfg.chn_num].status = DMA_STATUS_UNFINISHED;
+        }
+        break;
+
+        default :
+            printk("Don't support cmd [%d]\n", cmd);
+        break;
     }
 
-    t2 = jiffies;
-    diff = (long)t2 - (long)t1;
-    msec = diff * 1000/HZ;
-    printk("%s used %ld ms\n", __func__, msec);
+    return 0;
+
+error:
+
+    return -EFAULT;
+}
 
 
-    if (memcmp(src, dst, BUFFER_SIZE) == 0) {
-        printk("%s success.\n", __func__);
-    } else {
-        printk("%s failed.\n", __func__);
+static struct file_operations axidma_fops = {
+    .owner = THIS_MODULE,    
+    .llseek = no_llseek, 
+    .write = axidma_write,   
+    .unlocked_ioctl = axidma_unlocked_ioctl,    
+    .open = axidma_open, 
+    .release = axidma_release,
+};
+
+
+static struct miscdevice axidma_miscdev = {
+    .minor = MISC_DYNAMIC_MINOR,
+    .name = DRIVER_NAME,
+    .fops = &axidma_fops,
+};
+
+static int __init axidma_init(void)
+{
+    int ret = 0;
+
+    ret = misc_register(&axidma_miscdev);
+    if (ret) {
+        printk(KERN_ERR "cannot register miscdev (err=%d)\n", ret);     
+        return ret;
     }
 
-    printk("%s Done.\n", __func__);
-
-    dma_release_channel(chan);
+    memset(&channels, 0, sizeof(channels));
 
     return 0;
 }
 
-static void do_memcpy_no_dma(void)
+static void __exit axidma_exit(void)
 {
-    unsigned long t1, t2, diff, msec;
-    int i;
-    t1 = jiffies;
-
-    for (i=0; i<1000; i++) {
-        memcpy(dst, src, BUFFER_SIZE);
-    }
-
-    t2 = jiffies;
-    diff = (long)t2 - (long)t1;
-    msec = diff * 1000/HZ;
-    printk("%s used %ld ms\n", __func__, msec);
-
+    misc_deregister(&axidma_miscdev);
 }
 
-module_init(demo_init);
-module_exit(demo_exit);
+module_init(axidma_init);
+module_exit(axidma_exit);
 MODULE_LICENSE("GPL");
