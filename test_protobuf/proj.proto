@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+
+message Loading_Msg
+{
+    float cpu_load = 1;
+    float bpu_load = 2;
+    float mem_load = 3;
+    float gpu_load = 4;
+}
+
+/* message IPErrMsg
+{
+    bool ncf_err = 1;
+    bool cf_err  = 2;
+}
+
+message SolingDv_Msg
+{
+    Loading_Msg loading_msg = 1;
+    IPErrMsg    ip_err_msg  = 2;
+} */

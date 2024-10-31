@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package nest;
+
+import "google/protobuf/timestamp.proto";
+
+// 定义任务的状态
+enum TaskStatus {
+    UNKNOWN = 0;
+    PENDING = 1;
+    IN_PROGRESS = 2;
+    COMPLETED = 3;
+}
+
+// 定义任务消息
+message Task {
+    string id = 1;               // 任务的唯一标识符
+    string title = 2;            // 任务标题
+    string description = 3;      // 任务描述
+    TaskStatus status = 4;       // 任务状态
+    google.protobuf.Timestamp due_date = 5; // 截止日期
+}
+
+// 定义任务列表消息
+message TaskList {
+    repeated Task tasks = 1;     // 任务列表
+}
